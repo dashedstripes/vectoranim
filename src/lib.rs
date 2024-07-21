@@ -4,15 +4,23 @@ use wasm_bindgen::prelude::*;
 pub struct Canvas {
     width: u32,
     height: u32,
-    layers: Vec<Vec<u8>>,
+    layers: Vec<Layer>,
     active_layer: usize,
+}
+
+struct Layer {
+    data: Vec<u8>,
+    visible: bool,
 }
 
 #[wasm_bindgen]
 impl Canvas {
     pub fn new(width: u32, height: u32) -> Canvas {
         let size = (width * height * 4) as usize;
-        let initial_layer = vec![255; size];
+        let initial_layer = Layer {
+            data: vec![0; size],
+            visible: true,
+        };
         Canvas {
             width,
             height,
@@ -23,7 +31,10 @@ impl Canvas {
 
     pub fn add_layer(&mut self) -> usize {
         let size = (self.width * self.height * 4) as usize;
-        let new_layer = vec![0; size];
+        let new_layer = Layer {
+            data: vec![0; size],
+            visible: true,
+        };
         self.layers.push(new_layer);
         self.layers.len() - 1
     }
@@ -40,6 +51,20 @@ impl Canvas {
             if self.active_layer >= self.layers.len() {
                 self.active_layer = self.layers.len() - 1;
             }
+        }
+    }
+
+    pub fn toggle_layer_visibility(&mut self, index: usize) {
+        if index < self.layers.len() {
+            self.layers[index].visible = !self.layers[index].visible;
+        }
+    }
+
+    pub fn is_layer_visible(&self, index: usize) -> bool {
+        if index < self.layers.len() {
+            self.layers[index].visible
+        } else {
+            false
         }
     }
 
@@ -104,11 +129,12 @@ impl Canvas {
     fn set_pixel(&mut self, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
         if x < self.width && y < self.height {
             let idx = ((y * self.width + x) * 4) as usize;
-            let layer = &mut self.layers[self.active_layer];
-            layer[idx] = r;
-            layer[idx + 1] = g;
-            layer[idx + 2] = b;
-            layer[idx + 3] = a;
+            if let Some(layer) = self.layers.get_mut(self.active_layer) {
+                layer.data[idx] = r;
+                layer.data[idx + 1] = g;
+                layer.data[idx + 2] = b;
+                layer.data[idx + 3] = a;
+            }
         }
     }
 
@@ -124,17 +150,21 @@ impl Canvas {
         let size = (self.width * self.height * 4) as usize;
         let mut composite = vec![0; size];
 
-        for layer in &self.layers {
-            for i in (0..layer.len()).step_by(4) {
-                let alpha = layer[i + 3] as f32 / 255.0;
-                for j in 0..3 {
-                    // Iterate over R, G, B channels
-                    composite[i + j] = (composite[i + j] as f32 * (1.0 - alpha)
-                        + layer[i + j] as f32 * alpha) as u8;
+        for layer in self.layers.iter().rev() {
+            if layer.visible {
+                for y in 0..self.height {
+                    for x in 0..self.width {
+                        let i = ((y * self.width + x) * 4) as usize;
+                        let alpha = layer.data[i + 3] as f32 / 255.0;
+                        for c in 0..3 {
+                            let new_color = layer.data[i + c] as f32 * alpha
+                                + composite[i + c] as f32 * (1.0 - alpha);
+                            composite[i + c] = new_color as u8;
+                        }
+                        let new_alpha = alpha + (composite[i + 3] as f32 / 255.0) * (1.0 - alpha);
+                        composite[i + 3] = (new_alpha * 255.0) as u8;
+                    }
                 }
-                // Blend alpha channel separately
-                composite[i + 3] =
-                    (composite[i + 3] as f32 * (1.0 - alpha) + layer[i + 3] as f32 * alpha) as u8;
             }
         }
 

@@ -43,9 +43,15 @@
         background-color: white;
         border: 1px solid #ccc;
         cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
       }
       .layer.active {
         background-color: #e0e0e0;
+      }
+      .layer-visibility {
+        cursor: pointer;
       }
     </style>
   </head>
@@ -124,14 +130,31 @@
           for (let i = 0; i < wasmCanvas.layer_count(); i++) {
             const layerDiv = document.createElement("div");
             layerDiv.className = "layer";
-            layerDiv.textContent = `Layer ${i + 1}`;
             if (i === wasmCanvas.get_active_layer()) {
               layerDiv.classList.add("active");
             }
-            layerDiv.onclick = () => {
+
+            const layerName = document.createElement("span");
+            layerName.textContent = `Layer ${i + 1}`;
+            layerName.onclick = () => {
               wasmCanvas.set_active_layer(i);
               updateLayerList();
             };
+
+            const visibilityToggle = document.createElement("span");
+            visibilityToggle.className = "layer-visibility";
+            visibilityToggle.textContent = wasmCanvas.is_layer_visible(i)
+              ? "O"
+              : "X";
+            visibilityToggle.onclick = (e) => {
+              e.stopPropagation();
+              wasmCanvas.toggle_layer_visibility(i);
+              updateLayerList();
+              updateCanvas();
+            };
+
+            layerDiv.appendChild(layerName);
+            layerDiv.appendChild(visibilityToggle);
             layerList.appendChild(layerDiv);
           }
         }
