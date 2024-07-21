@@ -4,13 +4,20 @@ use wasm_bindgen::prelude::*;
 pub struct Canvas {
     width: u32,
     height: u32,
-    layers: Vec<Layer>,
-    active_layer: usize,
+    frames: Vec<Frame>,
+    current_frame: usize,
+    drawing_buffer: Vec<u8>,
+    dirty_rect: Option<(u32, u32, u32, u32)>, // (x, y, width, height)
 }
 
 struct Layer {
     data: Vec<u8>,
     visible: bool,
+}
+
+struct Frame {
+    layers: Vec<Layer>,
+    active_layer: usize,
 }
 
 #[wasm_bindgen]
@@ -21,11 +28,17 @@ impl Canvas {
             data: vec![0; size],
             visible: true,
         };
+        let initial_frame = Frame {
+            layers: vec![initial_layer],
+            active_layer: 0,
+        };
         Canvas {
             width,
             height,
-            layers: vec![initial_layer],
-            active_layer: 0,
+            frames: vec![initial_frame],
+            current_frame: 0,
+            drawing_buffer: vec![0; size],
+            dirty_rect: None,
         }
     }
 
@@ -35,36 +48,61 @@ impl Canvas {
             data: vec![0; size],
             visible: true,
         };
-        self.layers.push(new_layer);
-        self.layers.len() - 1
+        let frame = &mut self.frames[self.current_frame];
+        frame.layers.push(new_layer);
+        frame.layers.len() - 1
     }
 
     pub fn set_active_layer(&mut self, index: usize) {
-        if index < self.layers.len() {
-            self.active_layer = index;
+        let frame = &mut self.frames[self.current_frame];
+        if index < frame.layers.len() {
+            frame.active_layer = index;
         }
     }
 
     pub fn remove_layer(&mut self, index: usize) {
-        if self.layers.len() > 1 && index < self.layers.len() {
-            self.layers.remove(index);
-            if self.active_layer >= self.layers.len() {
-                self.active_layer = self.layers.len() - 1;
+        let frame = &mut self.frames[self.current_frame];
+        if frame.layers.len() > 1 && index < frame.layers.len() {
+            frame.layers.remove(index);
+            if frame.active_layer >= frame.layers.len() {
+                frame.active_layer = frame.layers.len() - 1;
             }
         }
     }
 
     pub fn toggle_layer_visibility(&mut self, index: usize) {
-        if index < self.layers.len() {
-            self.layers[index].visible = !self.layers[index].visible;
+        let frame = &mut self.frames[self.current_frame];
+        if index < frame.layers.len() {
+            frame.layers[index].visible = !frame.layers[index].visible;
         }
     }
 
     pub fn is_layer_visible(&self, index: usize) -> bool {
-        if index < self.layers.len() {
-            self.layers[index].visible
+        let frame = &self.frames[self.current_frame];
+        if index < frame.layers.len() {
+            frame.layers[index].visible
         } else {
             false
+        }
+    }
+
+    pub fn add_frame(&mut self) -> usize {
+        let size = (self.width * self.height * 4) as usize;
+        let new_frame = Frame {
+            layers: vec![Layer {
+                data: vec![0; size],
+                visible: true,
+            }],
+            active_layer: 0,
+        };
+        self.frames.push(new_frame);
+        self.current_frame = self.frames.len() - 1;
+        self.current_frame
+    }
+
+    pub fn set_current_frame(&mut self, index: usize) {
+        if index < self.frames.len() {
+            self.current_frame = index;
         }
     }
 
@@ -98,8 +136,21 @@ impl Canvas {
         let mut x = x0;
         let mut y = y0;
 
+        let radius = size as i32 / 2;
+        let radius_squared = radius * radius;
+
         loop {
-            self.draw_circle(x as u32, y as u32, size, r, g, b, a);
+            // Use a more efficient circle drawing algorithm
+            for cy in (y - radius).max(0)..(y + radius + 1).min(self.height as i32) {
+                for cx in (x - radius).max(0)..(x + radius + 1).min(self.width as i32) {
+                    let dx = cx - x;
+                    let dy = cy - y;
+                    if dx * dx + dy * dy <= radius_squared {
+                        self.set_pixel(cx as u32, cy as u32, r, g, b, a);
+                    }
+                }
+            }
+
             if x == x1 && y == y1 {
                 break;
             }
@@ -115,25 +166,40 @@ impl Canvas {
         }
     }
 
-    fn draw_circle(&mut self, cx: u32, cy: u32, radius: u32, r: u8, g: u8, b: u8, a: u8) {
-        let radius = radius as i32;
-        for y in -radius..=radius {
-            for x in -radius..=radius {
-                if x * x + y * y <= radius * radius {
-                    self.set_pixel((cx as i32 + x) as u32, (cy as i32 + y) as u32, r, g, b, a);
+    pub fn commit_drawing(&mut self) {
+        if let Some((x, y, width, height)) = self.dirty_rect {
+            let frame = &mut self.frames[self.current_frame];
+            let layer = &mut frame.layers[frame.active_layer];
+            for dy in 0..height {
+                for dx in 0..width {
+                    let buffer_idx = ((y + dy) * self.width + (x + dx)) as usize * 4;
+                    for i in 0..4 {
+                        layer.data[buffer_idx + i] = self.drawing_buffer[buffer_idx + i];
+                    }
                 }
             }
+            self.dirty_rect = None;
         }
     }
 
     fn set_pixel(&mut self, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
         if x < self.width && y < self.height {
             let idx = ((y * self.width + x) * 4) as usize;
-            if let Some(layer) = self.layers.get_mut(self.active_layer) {
-                layer.data[idx] = r;
-                layer.data[idx + 1] = g;
-                layer.data[idx + 2] = b;
-                layer.data[idx + 3] = a;
+            self.drawing_buffer[idx] = r;
+            self.drawing_buffer[idx + 1] = g;
+            self.drawing_buffer[idx + 2] = b;
+            self.drawing_buffer[idx + 3] = a;
+
+            // Update dirty rect
+            match self.dirty_rect {
+                Some((dx, dy, dw, dh)) => {
+                    let new_x = dx.min(x);
+                    let new_y = dy.min(y);
+                    let new_w = dw.max(x - new_x + 1);
+                    let new_h = dh.max(y - new_y + 1);
+                    self.dirty_rect = Some((new_x, new_y, new_w, new_h));
+                }
+                None => self.dirty_rect = Some((x, y, 1, 1)),
             }
         }
     }
@@ -146,36 +212,64 @@ impl Canvas {
         self.height
     }
 
-    pub fn get_composite_data(&self) -> Vec<u8> {
+    pub fn get_composite_data(&self, onion_skin_frames: Vec<usize>) -> Vec<u8> {
         let size = (self.width * self.height * 4) as usize;
         let mut composite = vec![0; size];
 
-        for layer in self.layers.iter().rev() {
-            if layer.visible {
-                for y in 0..self.height {
-                    for x in 0..self.width {
-                        let i = ((y * self.width + x) * 4) as usize;
-                        let alpha = layer.data[i + 3] as f32 / 255.0;
-                        for c in 0..3 {
-                            let new_color = layer.data[i + c] as f32 * alpha
-                                + composite[i + c] as f32 * (1.0 - alpha);
-                            composite[i + c] = new_color as u8;
-                        }
-                        let new_alpha = alpha + (composite[i + 3] as f32 / 255.0) * (1.0 - alpha);
-                        composite[i + 3] = (new_alpha * 255.0) as u8;
-                    }
-                }
+        // Add onion skin layers
+        for &frame_index in &onion_skin_frames {
+            if frame_index != self.current_frame {
+                let distance = (frame_index as i32 - self.current_frame as i32).abs() as f32;
+                let opacity = (0.3 / distance).min(0.3); // Fade out farther frames, max opacity 0.3
+                self.composite_frame(&mut composite, frame_index, opacity);
             }
         }
+
+        // Composite the current frame
+        self.composite_frame(&mut composite, self.current_frame, 1.0);
 
         composite
     }
 
+    fn composite_frame(&self, composite: &mut Vec<u8>, frame_index: usize, opacity: f32) {
+        if let Some(frame) = self.frames.get(frame_index) {
+            for layer in &frame.layers {
+                if layer.visible {
+                    for (i, chunk) in layer.data.chunks_exact(4).enumerate() {
+                        let base_index = i * 4;
+                        let layer_alpha = chunk[3] as f32 / 255.0;
+                        let alpha = layer_alpha * opacity;
+
+                        for j in 0..3 {
+                            // RGB channels
+                            let new_color = (1.0 - alpha) * composite[base_index + j] as f32
+                                + alpha * chunk[j] as f32;
+                            composite[base_index + j] = new_color.min(255.0) as u8;
+                        }
+
+                        // Update alpha channel
+                        let new_alpha = composite[base_index + 3] as f32
+                            + (255.0 - composite[base_index + 3] as f32) * alpha;
+                        composite[base_index + 3] = new_alpha.min(255.0) as u8;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub fn get_current_frame(&self) -> usize {
+        self.current_frame
+    }
+
     pub fn layer_count(&self) -> usize {
-        self.layers.len()
+        self.frames[self.current_frame].layers.len()
     }
 
     pub fn get_active_layer(&self) -> usize {
-        self.active_layer
+        self.frames[self.current_frame].active_layer
     }
 }

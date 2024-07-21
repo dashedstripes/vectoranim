@@ -3,13 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Wasm Hand-Drawn Art Tool</title>
+    <title>Wasm Hand-Drawn Animation Tool</title>
     <style>
+      * {
+        /* outline: 1px solid red; */
+      }
+
       body {
         font-family: Arial, sans-serif;
         display: flex;
+        flex-direction: column;
       }
-      #toolbar {
+      #toolbar,
+      #animationControls {
         margin-bottom: 10px;
       }
       .tool {
@@ -24,7 +30,8 @@
         background-color: #e0e0e0;
         border-color: #999;
       }
-      #sizeControl {
+      #sizeControl,
+      #onionSkinControl {
         display: inline-block;
         vertical-align: middle;
       }
@@ -53,171 +60,66 @@
       .layer-visibility {
         cursor: pointer;
       }
+      #timeline {
+        width: 100%;
+        height: 50px;
+        background-color: #f0f0f0;
+        position: relative;
+        overflow-x: auto;
+        white-space: nowrap;
+      }
+      .frame {
+        display: inline-block;
+        width: 30px;
+        height: 30px;
+        margin: 10px 5px;
+        background-color: #fff;
+        border: 1px solid #ccc;
+        cursor: pointer;
+      }
+      .frame.active {
+        border-color: #000;
+      }
     </style>
   </head>
   <body>
-    <div>
-      <div id="toolbar">
-        <button id="pencilTool" class="tool active">Pencil</button>
-        <button id="eraserTool" class="tool">Eraser</button>
-        <div id="sizeControl">
-          Size:
-          <input type="range" id="sizeSlider" min="1" max="50" value="5" />
-          <span id="sizeValue">5</span>
-        </div>
+    <div id="toolbar">
+      <button id="pencilTool" class="tool active">Pencil</button>
+      <button id="eraserTool" class="tool">Eraser</button>
+      <div id="sizeControl">
+        Size: <input type="range" id="sizeSlider" min="1" max="50" value="5" />
+        <span id="sizeValue">5</span>
       </div>
+    </div>
+    <div id="animationControls">
+      <button id="playPauseBtn">Play</button>
+      <button id="addFrameBtn">Add Frame</button>
+      <div id="onionSkinControl">
+        <label>
+          <input type="checkbox" id="onionSkinToggle" /> Onion Skin
+        </label>
+        <label>
+          Frames:
+          <input
+            type="number"
+            id="onionSkinFramesInput"
+            min="1"
+            max="5"
+            value="1"
+          />
+        </label>
+      </div>
+    </div>
+    <div id="timeline"></div>
+    <div style="display: flex; justify-items: space-between">
       <canvas id="drawingCanvas" width="800" height="600"></canvas>
+      <div id="layerPanel">
+        <h3>Layers</h3>
+        <button id="addLayerBtn">Add Layer</button>
+        <button id="removeLayerBtn">Remove Layer</button>
+        <div id="layerList"></div>
+      </div>
     </div>
-    <div id="layerPanel">
-      <h3>Layers</h3>
-      <button id="addLayerBtn">Add Layer</button>
-      <button id="removeLayerBtn">Remove Layer</button>
-      <div id="layerList"></div>
-    </div>
-    <script type="module">
-      import init, { Canvas } from "./pkg/rust_wasm_lib.js";
-
-      async function run() {
-        await init();
-
-        const canvas = document.getElementById("drawingCanvas");
-        const ctx = canvas.getContext("2d");
-        const width = canvas.width;
-        const height = canvas.height;
-
-        const wasmCanvas = Canvas.new(width, height);
-        const imageData = ctx.createImageData(width, height);
-
-        let isDrawing = false;
-        let lastX, lastY;
-        let currentTool = "pencil";
-        let currentColor = 0x000000;
-        let currentSize = 5;
-
-        const pencilBtn = document.getElementById("pencilTool");
-        const eraserBtn = document.getElementById("eraserTool");
-        const sizeSlider = document.getElementById("sizeSlider");
-        const sizeValue = document.getElementById("sizeValue");
-        const addLayerBtn = document.getElementById("addLayerBtn");
-        const removeLayerBtn = document.getElementById("removeLayerBtn");
-        const layerList = document.getElementById("layerList");
-
-        function updateCanvas() {
-          const wasmData = wasmCanvas.get_composite_data();
-          imageData.data.set(wasmData);
-          ctx.putImageData(imageData, 0, 0);
-        }
-
-        function setActiveTool(tool) {
-          currentTool = tool;
-          pencilBtn.classList.toggle("active", tool === "pencil");
-          eraserBtn.classList.toggle("active", tool === "eraser");
-        }
-
-        function drawBrushPreview(x, y) {
-          ctx.beginPath();
-          ctx.arc(x, y, currentSize / 2, 0, Math.PI * 2);
-          ctx.strokeStyle = currentTool === "eraser" ? "black" : "white";
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.arc(x, y, currentSize / 2 - 1, 0, Math.PI * 2);
-          ctx.strokeStyle = currentTool === "eraser" ? "white" : "black";
-          ctx.stroke();
-        }
-
-        function updateLayerList() {
-          layerList.innerHTML = "";
-          for (let i = 0; i < wasmCanvas.layer_count(); i++) {
-            const layerDiv = document.createElement("div");
-            layerDiv.className = "layer";
-            if (i === wasmCanvas.get_active_layer()) {
-              layerDiv.classList.add("active");
-            }
-
-            const layerName = document.createElement("span");
-            layerName.textContent = `Layer ${i + 1}`;
-            layerName.onclick = () => {
-              wasmCanvas.set_active_layer(i);
-              updateLayerList();
-            };
-
-            const visibilityToggle = document.createElement("span");
-            visibilityToggle.className = "layer-visibility";
-            visibilityToggle.textContent = wasmCanvas.is_layer_visible(i)
-              ? "O"
-              : "X";
-            visibilityToggle.onclick = (e) => {
-              e.stopPropagation();
-              wasmCanvas.toggle_layer_visibility(i);
-              updateLayerList();
-              updateCanvas();
-            };
-
-            layerDiv.appendChild(layerName);
-            layerDiv.appendChild(visibilityToggle);
-            layerList.appendChild(layerDiv);
-          }
-        }
-
-        pencilBtn.addEventListener("click", () => setActiveTool("pencil"));
-        eraserBtn.addEventListener("click", () => setActiveTool("eraser"));
-
-        sizeSlider.addEventListener("input", (e) => {
-          currentSize = parseInt(e.target.value);
-          sizeValue.textContent = currentSize;
-        });
-
-        addLayerBtn.addEventListener("click", () => {
-          wasmCanvas.add_layer();
-          updateLayerList();
-        });
-
-        removeLayerBtn.addEventListener("click", () => {
-          wasmCanvas.remove_layer(wasmCanvas.get_active_layer());
-          updateLayerList();
-          updateCanvas();
-        });
-
-        canvas.addEventListener("mousedown", (e) => {
-          isDrawing = true;
-          [lastX, lastY] = [e.offsetX, e.offsetY];
-        });
-
-        canvas.addEventListener("mousemove", (e) => {
-          updateCanvas();
-          drawBrushPreview(e.offsetX, e.offsetY);
-
-          if (!isDrawing) return;
-          wasmCanvas.draw_line(
-            lastX,
-            lastY,
-            e.offsetX,
-            e.offsetY,
-            currentColor,
-            currentTool === "eraser",
-            currentSize,
-          );
-          [lastX, lastY] = [e.offsetX, e.offsetY];
-        });
-
-        canvas.addEventListener("mouseup", () => {
-          isDrawing = false;
-        });
-
-        canvas.addEventListener("mouseout", () => {
-          isDrawing = false;
-          updateCanvas();
-        });
-
-        canvas.addEventListener("mouseover", (e) => {
-          drawBrushPreview(e.offsetX, e.offsetY);
-        });
-
-        updateCanvas();
-        updateLayerList();
-      }
-
-      run();
-    </script>
+    <script type="module" src="app.js"></script>
   </body>
 </html>
