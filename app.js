@@ -78,21 +78,11 @@ function setupAnimationControls() {
     "#animationControls button:nth-child(2)",
   );
   addFrameButton.addEventListener("click", addFrame);
-
-  const onionSkinInput = document.querySelector("#onionSkinControl input");
-  onionSkinInput.addEventListener("input", (e) => {
-    onionSkinFrames = parseInt(e.target.value);
-    updateCanvas();
-  });
 }
 
 function setupOnionSkinControls() {
-  const onionSkinCheckbox = document.querySelector(
-    "#onionSkinControl input[type='checkbox']",
-  );
-  const onionSkinFramesInput = document.querySelector(
-    "#onionSkinControl input[type='number']",
-  );
+  const onionSkinCheckbox = document.querySelector("#onionSkinControl");
+  const onionSkinFramesInput = document.querySelector("#onionSkinFramesInput");
 
   onionSkinCheckbox.addEventListener("change", (e) => {
     onionSkinEnabled = e.target.checked;
@@ -100,7 +90,11 @@ function setupOnionSkinControls() {
   });
 
   onionSkinFramesInput.addEventListener("input", (e) => {
-    onionSkinFrames = parseInt(e.target.value);
+    if (typeof parseInt(e.target.value) != "number") {
+      onionSkinFrames = 1;
+    } else {
+      onionSkinFrames = parseInt(e.target.value);
+    }
     if (onionSkinEnabled) {
       updateCanvas();
     }
